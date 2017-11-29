@@ -6,6 +6,12 @@
 Data Mining Task 3: Finding representative examples
 
 @author: Alessandro, Ioana, Morio
+
+Task: find 200 points that are represetnative of the data.
+
+Here, each mapper computes a coreset based on a subsample of the entire dataset.
+These coresets are then fed into the reducer, which takes the union of all 
+coresets and runs a k-means algorithm (k=200). 
 """
 
 #------------------------------------------------------------------------------
@@ -16,7 +22,7 @@ from scipy.cluster.vq import kmeans
 # Parameters
 dim = 250
 k = 200
-coreset_size = 500
+coreset_size = 300
 # parameters for k-means in reducer:
 num_restarts = 4
 max_iter = 20
@@ -40,25 +46,24 @@ def mapper(key, value):
         
         value: coreset. (coreset_size x dim) NumPy Array.
     """
-    print 'starting mapper...'
     data = value
-    
-    ## Perform bicriteria approximation with D^2 sampling.
-
-    # Obtain first point uniformly at random:
-    B = np.empty(coreset_size)
+ 
+    ### Perform bicriteria approximation with D^2 sampling.
+    # Obtain first point, b, uniformly at random:
     b = data[np.random.randint(len(data))]
+    # initialize matrix to contain distances from every point in X to all values of b:
     distances = np.empty((0, len(data)))
+    
     # Find remaining centres:
     for centre_num in range(1,coreset_size):
         distances = np.vstack((distances, np.linalg.norm(data-b, ord=2, \
-                                                         axis=1)**2)) # add distance of every point in X to the new sampled point b
-        min_distances = distances.min(axis=0) # compute the current minimum distance of every point in X to the sampled points
+                                                         axis=1)**2)) # add distance of every point in data to the most recently sampled center b
+        min_distances = distances.min(axis=0) # compute the minimum distance of every point in X to the centers
         prob = min_distances/min_distances.sum()
-        b = data[np.random.choice(len(data), replace=False,p=prob)] # sample point with probability proportional to the minimum distance to the already sampled points
+        b = data[np.random.choice(len(data), replace=False ,p=prob)] # sample point with probability proportional to the minimum distance to the already sampled points
 
-    # Construct coreset:
-    # parameters for calculation:
+    ### Construct coreset:
+    # Parameters for calculation:
     alpha = np.log2(coreset_size) + 1
     C_phi = (1./len(data)) * min_distances.sum()
     
@@ -68,12 +73,12 @@ def mapper(key, value):
     B_i = [[] for centre in range(coreset_size)] 
     for idx, x in enumerate(data):
         B_i[B_i_ind[idx]].append(idx)
-    
+        
     # min_B_i = {x in data: i in argmin(d(x_i,B_i))}
     min_B_i = [sum([min_distances[x_i] for x_i in B_i[k_i]]) \
                for k_i in range(coreset_size)]
     
-    # each summed term in sampling dist, q(x):
+    # each summed term in sampling dist, q(x); (the long equation in the slides)
     s_x = np.array(
             [alpha * min_distances[x_i] / C_phi \
            + [2. * alpha * min_B_i[k_i] / (len(B_i[k_i])*C_phi) \
@@ -85,10 +90,8 @@ def mapper(key, value):
     weights = 1./(coreset_size * prob_s)
     coreset = [(data[s], weights[s]) for s in \
                np.random.choice(len(data), size=coreset_size, replace=False, p=prob_s)]
-    
-    print 'finsihed mapping'
+
     yield 'key', coreset
-    
     
 
 def reducer(key, values):
@@ -108,15 +111,13 @@ def reducer(key, values):
         each point in coreset; column 1 contains weights associated with each 
         of these points.            
     """
-#    print 'reducer values shape', values.shape, 'values', values
-    print 'starting reducer...'
-    coreset = np.array(values[:,0].tolist())
-    weights = np.array(values[:,1].tolist())
+    coreset = np.array(values[:,0].tolist()) # to get n x d array
+    weights = np.array(values[:,1].tolist()) 
     weights = weights/sum(weights) #renormalize
     
     def dist_to_nearest(centers, point):
         """
-        FInds distance of point to nearest center
+        Finds distance of point to nearest center
         """
         centers = np.asarray(centers)
         distance,index = KDTree(centers).query(point)
@@ -124,6 +125,13 @@ def reducer(key, values):
     
     def weighted_kmeans(coreset, weights, initial_centers, k=200, max_iter=20):
         """
+       *** NOTE: right now, this function does nothing. The k-means
+       algorithm doesnt make any changes to the initial centers.
+       
+       There's probably an error here somewhere; or it might just be
+       that the coreset samples are already good enough so that k means 
+       doesnt change anything. ***
+        
         Implements observation-weighted K-means clustering on coresets.
         
         Inputs: 
@@ -146,9 +154,9 @@ def reducer(key, values):
         iter_num = 0
         converged = False
         centers = initial_centers
-        # Run kmeans
+        ### Run kmeans
         while iter_num < max_iter and not converged:
-            prev_centers = centers
+            prev_centers = centers # previos centers
             #assign each point to closest cluster
             assigned_center_ind = []
             for point in coreset: # for each data point
@@ -164,11 +172,9 @@ def reducer(key, values):
                                               in enumerate(coreset) if \
                                               assigned_center_ind[point_idx]\
                                               == center_idx])
-#                print points_in_cluster[0], 'pts in cluster [0], full length:', len(points_in_cluster)
-#                centers[center_idx] = 0
-                if len(points_in_cluster)>0: # if atleast one point in cluster
-#                    print centers[center_idx], 'center prev'
-                    
+
+                if len(points_in_cluster)>0: # if at least one point in cluster
+
                     print 'indexed coreset and weights', coreset[points_in_cluster].shape, weights[points_in_cluster].shape
                     centers[center_idx] = np.average(coreset[points_in_cluster], \
                                                      axis = 0,
@@ -177,7 +183,8 @@ def reducer(key, values):
 
                     print np.linalg.norm((centers[center_idx]-center)) , 'diff in centers'
                     
-            if np.linalg.norm(prev_centers-centers).all() < 1e-4:
+            # halt algorithm if fully converged:       
+            if np.linalg.norm(prev_centers-centers).all() < 1e-4: 
                 converged = True
                 print 'converged on iteration', iter_num
        
@@ -189,23 +196,22 @@ def reducer(key, values):
         
         return centers, score
     
-    yielded_centers = np.zeros((num_restarts,k,dim))
+    yielded_centers = np.zeros((num_restarts, k, dim))
     scores = np.zeros(num_restarts)
     
-    for run in range(num_restarts):
-#        print 'length of coreset', len(coreset), 'length of weights', len(weights)
-#        print 'type of weights', type(weights), 'with shape', weights.shape
-        init_centersidx = [np.random.choice(len(coreset),size=k,replace=False,p=list(weights))]
-#        init_centersidx = [np.random.choice(len(coreset),size=k,replace=False)]
+    for run in range(num_restarts): # re-initialize k-means several times
+        init_centersidx = [np.random.choice(len(coreset),size=k,replace=False,p=list(weights))] # weight-biased sampling
+        # init_centersidx = [np.random.choice(len(coreset),size=k,replace=False)] # or uniform sampling
         init_centers = np.array(coreset[init_centersidx].tolist())
-        print 'shape of initial centers', init_centers.shape
         yielded_centers[run], scores[run] = weighted_kmeans(coreset=coreset, \
                                                             weights=weights, \
                                                             initial_centers=init_centers)
     
     # find best centers
     best_centers = yielded_centers[scores.argmin()]
+    
     print 'scores were', scores
+    
     yield best_centers
     
             

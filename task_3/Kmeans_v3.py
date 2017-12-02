@@ -4,11 +4,8 @@
 
 """
 Data Mining Task 3: Finding representative examples
-
 @author: Alessandro, Ioana, Morio
-
 Task: find 200 points that are represetnative of the data.
-
 Here, each mapper computes a coreset based on a subsample of the entire dataset.
 These coresets are then fed into the reducer, which takes the union of all 
 coresets and runs a k-means algorithm (k=200). 
@@ -18,14 +15,16 @@ coresets and runs a k-means algorithm (k=200).
 import numpy as np
 from scipy.spatial import KDTree
 from scipy.cluster.vq import kmeans
+
+np.random.seed(100)
 #------------------------------------------------------------------------------
 # Parameters
 dim = 250
 k = 200
-coreset_size = 300
+coreset_size = 210
 # parameters for k-means in reducer:
-num_restarts = 4
-max_iter = 20
+num_restarts = 8
+max_iter = 10
 #------------------------------------------------------------------------------
 def mapper(key, value):
     """
@@ -77,17 +76,25 @@ def mapper(key, value):
     # min_B_i = {x in data: i in argmin(d(x_i,B_i))}
     min_B_i = [sum([min_distances[x_i] for x_i in B_i[k_i]]) \
                for k_i in range(coreset_size)]
-    
     # each summed term in sampling dist, q(x); (the long equation in the slides)
-    s_x = np.array(
-            [alpha * min_distances[x_i] / C_phi \
-           + [2. * alpha * min_B_i[k_i] / (len(B_i[k_i])*C_phi) \
-              + 4. * len(data) / len(B_i[k_i]) \
-              if B_i[k_i] else 0 for k_i in range(coreset_size)][B_i_ind[x_i]] \
-              for x_i in range(len(data))] )
 
+    s_term = [2. * alpha * min_B_i[k_i] / (len(B_i[k_i])*C_phi) \
+               + 4. * len(data)/len(B_i[k_i]) if B_i[k_i] else 0 \
+               for k_i in range(coreset_size)]
+
+    s_x = np.array([alpha * min_distances[x_i] / C_phi + s_term[B_i_ind[x_i]] \
+                                                for x_i in range(len(data))])
+#    s_x = np.array(
+#            [alpha * min_distances[x_i] / C_phi \
+#             + [2. * alpha * min_B_i[k_i] / (len(B_i[k_i])*C_phi) \
+#             + 4. * len(data) / len(B_i[k_i]) \
+#              if B_i[k_i] else 0 for k_i in range(coreset_size)] \
+#              for x_i in range(len(data))] )
+
+#             for x_i in range(len(data))] \
+#             if B_i[k_i] else 0 for k_i in range(coreset_size)])
     prob_s = s_x/s_x.sum()
-    weights = 1./(coreset_size * prob_s)
+    weights = 1./prob_s
     coreset = [(data[s], weights[s]) for s in \
                np.random.choice(len(data), size=coreset_size, replace=False, p=prob_s)]
 
@@ -121,7 +128,7 @@ def reducer(key, values):
         """
         centers = np.asarray(centers)
         distance,index = KDTree(centers).query(point)
-        return distance
+        return index
     
     def weighted_kmeans(coreset, weights, initial_centers, k=200, max_iter=20):
         """
@@ -156,42 +163,50 @@ def reducer(key, values):
         centers = initial_centers
         ### Run kmeans
         while iter_num < max_iter and not converged:
-            prev_centers = centers # previos centers
+            iter_num += 1
+            updated = 0 #initialize num updated centers
             #assign each point to closest cluster
             assigned_center_ind = []
             for point in coreset: # for each data point
                 distances= [] # initialize list of distances
-                for center in centers:
-                    distances.append(np.linalg.norm(point-center)**2) # append distance of point to each center
-                cluster_idx = np.argmin(distances) # find the index of center that point is closest to
-#                print cluster_idx, 'cluster index'
-                assigned_center_ind.append(cluster_idx) # list contain cluster index that each data point is closest to
+                nearest_center_idx = dist_to_nearest(centers, point)
+                assigned_center_ind.append(nearest_center_idx) # list contain cluster index that each data point is closest to
+                
+#            print 'assigned_center_ind', assigned_center_ind
             # find new centers:
             for center_idx, center in enumerate(centers):
-                points_in_cluster = np.array([point_idx for point_idx, point \
+                points_in_cluster = np.array([point_idx for point_idx, p \
                                               in enumerate(coreset) if \
                                               assigned_center_ind[point_idx]\
                                               == center_idx])
+                
 
                 if len(points_in_cluster)>0: # if at least one point in cluster
-
-                    print 'indexed coreset and weights', coreset[points_in_cluster].shape, weights[points_in_cluster].shape
+#                    print 'center and weight shape', coreset[points_in_cluster].shape,weights[points_in_cluster].shape
+##                    print 'center[0]', center[0]
+##                    print coreset[points_in_cluster,0]
+##                    print weights[points_in_cluster]
+#                    print (np.average(coreset[points_in_cluster], \
+#                                                     axis = 0, \
+#                                                     weights = \
+#                                                     weights[points_in_cluster]))[0], 'is what is should be'
+#                    
                     centers[center_idx] = np.average(coreset[points_in_cluster], \
                                                      axis = 0,
                                                      weights = \
                                                      weights[points_in_cluster])
 
-                    print np.linalg.norm((centers[center_idx]-center)) , 'diff in centers'
-                    
-            # halt algorithm if fully converged:       
-            if np.linalg.norm(prev_centers-centers).all() < 1e-4: 
+                    if (centers[center_idx] != center).all():
+                        updated+=1
+            print 'updated', updated, 'centers'
+            if updated==0: 
                 converged = True
                 print 'converged on iteration', iter_num
        
-            iter_num += 1
+            print 'iter num', iter_num
         
         # find quantization error: 
-        score = np.sum([dist_to_nearest(centers, x_i) ** 2 \
+        score = np.sum([dist_to_nearest(centers, x_i) ** 2 
                          for idx, x_i in enumerate(coreset)])
         
         return centers, score
@@ -200,9 +215,12 @@ def reducer(key, values):
     scores = np.zeros(num_restarts)
     
     for run in range(num_restarts): # re-initialize k-means several times
-        init_centersidx = [np.random.choice(len(coreset),size=k,replace=False,p=list(weights))] # weight-biased sampling
+        inv_weights = [1/w for w in weights]
+        inv_weights = inv_weights/sum(inv_weights)
+        init_centersidx = [np.random.choice(len(coreset),size=k,replace=False,p=inv_weights)] # weight-biased sampling
         # init_centersidx = [np.random.choice(len(coreset),size=k,replace=False)] # or uniform sampling
         init_centers = np.array(coreset[init_centersidx].tolist())
+        print init_centers.shape, 'are initial center shapes'
         yielded_centers[run], scores[run] = weighted_kmeans(coreset=coreset, \
                                                             weights=weights, \
                                                             initial_centers=init_centers)
@@ -219,6 +237,5 @@ def reducer(key, values):
         
     
         
-    
     
     

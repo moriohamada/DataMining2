@@ -16,15 +16,18 @@ import numpy as np
 from scipy.spatial import KDTree
 from scipy.cluster.vq import kmeans
 
-np.random.seed(100)
 #------------------------------------------------------------------------------
 # Parameters
 dim = 250
 k = 200
-coreset_size = 210
+coreset_size = 150
 # parameters for k-means in reducer:
-num_restarts = 8
-max_iter = 10
+num_restarts =3
+max_iter = 25
+
+print 'Starting with coreset size of', coreset_size
+print 'Max iterations per kmeans algorithm:', max_iter
+print 'Num restarts:', num_restarts
 #------------------------------------------------------------------------------
 def mapper(key, value):
     """
@@ -84,15 +87,7 @@ def mapper(key, value):
 
     s_x = np.array([alpha * min_distances[x_i] / C_phi + s_term[B_i_ind[x_i]] \
                                                 for x_i in range(len(data))])
-#    s_x = np.array(
-#            [alpha * min_distances[x_i] / C_phi \
-#             + [2. * alpha * min_B_i[k_i] / (len(B_i[k_i])*C_phi) \
-#             + 4. * len(data) / len(B_i[k_i]) \
-#              if B_i[k_i] else 0 for k_i in range(coreset_size)] \
-#              for x_i in range(len(data))] )
 
-#             for x_i in range(len(data))] \
-#             if B_i[k_i] else 0 for k_i in range(coreset_size)])
     prob_s = s_x/s_x.sum()
     weights = 1./prob_s
     coreset = [(data[s], weights[s]) for s in \
@@ -130,7 +125,7 @@ def reducer(key, values):
         distance,index = KDTree(centers).query(point)
         return index
     
-    def weighted_kmeans(coreset, weights, initial_centers, k=200, max_iter=20):
+    def weighted_kmeans(coreset, weights, initial_centers, k=200, max_iter=max_iter):
         """
        *** NOTE: right now, this function does nothing. The k-means
        algorithm doesnt make any changes to the initial centers.
@@ -172,9 +167,10 @@ def reducer(key, values):
                 nearest_center_idx = dist_to_nearest(centers, point)
                 assigned_center_ind.append(nearest_center_idx) # list contain cluster index that each data point is closest to
                 
-#            print 'assigned_center_ind', assigned_center_ind
             # find new centers:
             for center_idx, center in enumerate(centers):
+#                old_center = center
+#                print 'old cent', old_center[0]
                 points_in_cluster = np.array([point_idx for point_idx, p \
                                               in enumerate(coreset) if \
                                               assigned_center_ind[point_idx]\
@@ -182,29 +178,11 @@ def reducer(key, values):
                 
 
                 if len(points_in_cluster)>0: # if at least one point in cluster
-#                    print 'center and weight shape', coreset[points_in_cluster].shape,weights[points_in_cluster].shape
-##                    print 'center[0]', center[0]
-##                    print coreset[points_in_cluster,0]
-##                    print weights[points_in_cluster]
-#                    print (np.average(coreset[points_in_cluster], \
-#                                                     axis = 0, \
-#                                                     weights = \
-#                                                     weights[points_in_cluster]))[0], 'is what is should be'
-#                    
                     centers[center_idx] = np.average(coreset[points_in_cluster], \
-                                                     axis = 0,
+                                                     axis = 0, \
                                                      weights = \
                                                      weights[points_in_cluster])
 
-                    if (centers[center_idx] != center).all():
-                        updated+=1
-            print 'updated', updated, 'centers'
-            if updated==0: 
-                converged = True
-                print 'converged on iteration', iter_num
-       
-            print 'iter num', iter_num
-        
         # find quantization error: 
         score = np.sum([dist_to_nearest(centers, x_i) ** 2 
                          for idx, x_i in enumerate(coreset)])
@@ -220,7 +198,6 @@ def reducer(key, values):
         init_centersidx = [np.random.choice(len(coreset),size=k,replace=False,p=inv_weights)] # weight-biased sampling
         # init_centersidx = [np.random.choice(len(coreset),size=k,replace=False)] # or uniform sampling
         init_centers = np.array(coreset[init_centersidx].tolist())
-        print init_centers.shape, 'are initial center shapes'
         yielded_centers[run], scores[run] = weighted_kmeans(coreset=coreset, \
                                                             weights=weights, \
                                                             initial_centers=init_centers)

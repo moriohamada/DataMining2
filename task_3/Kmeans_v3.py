@@ -20,10 +20,10 @@ from scipy.cluster.vq import kmeans
 # Parameters
 dim = 250
 k = 200
-coreset_size = 150
+coreset_size = 200
 # parameters for k-means in reducer:
 num_restarts =3
-max_iter = 25
+max_iter = 15
 
 print 'Starting with coreset size of', coreset_size
 print 'Max iterations per kmeans algorithm:', max_iter
